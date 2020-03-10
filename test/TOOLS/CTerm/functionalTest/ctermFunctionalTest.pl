@@ -32,6 +32,10 @@ $| = 1;
 my $status = 1;
 
 my $dispatchTable = {
+	## 2 új
+	'comment.base.local'  => sub { return comment({subFunction => 'base', subType => 'local'}) },
+	'comment.base.remote'  => sub { return comment({subFunction => 'base', subType => 'remote'}) },
+
 	#még nincs implementálva/hibás a cterm-ben
 	#'dcopy.base.local'  => sub { return dcopy({subFunction => 'base', subType => 'local'}) }, 
 	#'dcopy.base.remote'  => sub { return dcopy({subFunction => 'base', subType => 'remote'}) }, 
@@ -73,11 +77,13 @@ my $dispatchTable = {
 	'fcopy.notExistingFile.local'  => sub { return fcopy({subFunction => 'notExistingFile', subType => 'local'}) },
 	'fcopy.notExistingFile.remote'  => sub { return fcopy({subFunction => 'notExistingFile', subType => 'remote'}) },
 	
-	#### ide még kell??
 	'fcreate.base.local'  => sub { return fcreate({subFunction => 'base', subType => 'local'}) },
 	'fcreate.base.remote'  => sub { return fcreate({subFunction => 'base', subType => 'remote'}) },
 	'fcreate.existingFile.local'  => sub { return fcreate({subFunction => 'existingFile', subType => 'local'}) },
-	
+	'fcreate.existingFile.remote'  => sub { return fcreate({subFunction => 'existingFile', subType => 'remote'}) },
+	'fcreate.invalidParameter.local'  => sub { return dcreate({subFunction => 'invalidParameter', subType => 'local'}) },
+	'fcreate.invalidParameter.remote'  => sub { return dcreate({subFunction => 'invalidParameter', subType => 'remote'}) },
+
 	'fdelete.base.local'  => sub { return fdelete({subFunction => 'base', subType => 'local'}) }, #ok
 	'fdelete.base.remote'  => sub { return fdelete({subFunction => 'base', subType => 'remote'}) }, #ok
 	'fdelete.accessDeniedFile.local'  => sub { return fdelete({subFunction => 'accessDeniedFile', subType => 'local'}) }, #ok
@@ -97,6 +103,7 @@ my $dispatchTable = {
 	#'fgrep.base.local'  => sub { return  fgrep({subFunction => 'base', subType => 'local'}) },
 	#'fgrep.base.remote'  => sub { return  fgrep({subFunction => 'base', subType => 'remote'}) },
 	
+	#notExistingFile
 	'fhash.base.local'  => sub { return fhash({subFunction => 'base', subType => 'local'}) }, #ok
 	'fhash.base.remote'  => sub { return fhash({subFunction => 'base', subType => 'remote'}) }, #ok
 	
@@ -111,15 +118,16 @@ my $dispatchTable = {
 	'fput.accessDeniedFile.remote'  => sub { return fput({subFunction => 'accessDeniedFile', subType => 'remote'}) }, # átmásolja, a teszt hibát dob
 	'fput.notExistingFile.remote'  => sub { return fput({subFunction => 'notExistingFile', subType => 'remote'}) },
 	
+	#notExistingFile, accessDeniedFile
 	'fsize.base.local'  => sub { return fsize({subFunction => 'base', subType => 'local'}) }, #ok
 	'fsize.base.remote'  => sub { return fsize({subFunction => 'base', subType => 'remote'}) }, #ok
 	
 	'list.base.local'  => sub { return list({subFunction => 'base', subType => 'local'}) }, #ok
 	'list.base.remote'  => sub { return list({subFunction => 'base', subType => 'remote'}) }, #ok
 	
-	# 2 új
-	'load.base.local'  => sub { return load({subFunction => 'base', subType => 'local'}) },
-	'load.base.remote'  => sub { return load({subFunction => 'base', subType => 'remote'}) },
+	# az interface nem jól működik
+	#'load.base.local'  => sub { return load({subFunction => 'base', subType => 'local'}) },
+	#'load.base.remote'  => sub { return load({subFunction => 'base', subType => 'remote'}) },
 	
 	'version.base.local'  => sub { return version({subFunction => 'base', subType => 'local'}) }, #ok
 	'version.base.remote'  => sub { return version({subFunction => 'base', subType => 'remote'}) } #ok
@@ -267,6 +275,58 @@ END {
 #Subroutines
 #########################
 
+sub comment {
+	my ($options) = @_;
+	my $sub = substr((caller(0))[3], 6);
+	my $subFunction;
+	my $parameter;
+	my $command = '#';
+	
+	$subFunction = 'base';
+	$parameter = 'echo test';
+	if ($options->{subFunction} eq $subFunction) {
+		eval {
+			my $localCterm = new CTermInterface({cterm => $cterm});
+			$loghandler->writeLog({ text => "$sub.$subFunction.$options->{subType}: local cterm: $localCterm->{childpid}"});
+			my $remoteCterm;
+			if ($options->{subType} eq 'remote') {
+				$remoteCterm = open3(my $stdin, my $stdout, my $stderr, $cterm, "-s", "-a", $remoteIp, "-p", $remotePort);
+				$loghandler->writeLog({ text => "$sub.$subFunction.$options->{subType}: remote cterm: $remoteCterm"});
+				$localCterm->command("connect", $remoteIp, $remotePort);
+			}
+			
+			$loghandler->writeLog({ text => "$sub.$subFunction.$options->{subType}: command: $command $parameter"});
+			my $answer = $localCterm->command($command, $parameter);
+			$loghandler->writeLog({ text => "$sub: answer:\n$answer"});
+			
+			if ($options->{subType} eq 'remote') {
+				$localCterm->command("disconnect");
+				my ($time, $timeout) = (time, 9);
+				kill 'SIGKILL', $remoteCterm;
+				my $status = kill 0, $remoteCterm;
+				while ($status) {
+					if ((time-$time) > $timeout) {
+						die "remoteCterm still exists";
+					}
+					$status = kill 0, $remoteCterm;
+				}
+			}
+			$localCterm->DESTROY();	
+			
+			die "answer is incorrect" if ($answer ne 'ok');
+			
+		}; if ($@) {
+			$loghandler->writeLog({ text => "$sub.$subFunction.$options->{subType}: error: $@", textColour => "white on_red"});
+			$loghandler->writeLog({ text => "$sub.$subFunction.$options->{subType}: FAILED", textColour => "white on_red"});
+			(rmtree("$scriptDir/$sub") or die "can not delete: $scriptDir/$sub") if(-e "$scriptDir/$sub");
+			return 1;
+		} else {
+			$loghandler->writeLog({ text => "$sub.$subFunction.$options->{subType}: PASSED", textColour => "white on_green"});
+			(rmtree("$scriptDir/$sub") or die "can not delete: $scriptDir/$sub") if(-e "$scriptDir/$sub");
+			return 0;
+		}
+	}
+}
 
 sub dcreate {
 	my ($options) = @_;
@@ -343,13 +403,13 @@ sub dcreate {
 			
 			if ($options->{subType} eq 'remote') {
 				$localCterm->command("disconnect");
-				$localCterm->command('pdelpid', $remoteCterm);
-				my ($time, $timeout) = (time, 6);
+				my ($time, $timeout) = (time, 9);
+				kill 'SIGKILL', $remoteCterm;
 				my $status = kill 0, $remoteCterm;
 				while ($status) {
 					if ((time-$time) > $timeout) {
 						die "remoteCterm still exists";
-					}   
+					}
 					$status = kill 0, $remoteCterm;
 				}
 			}
@@ -391,14 +451,14 @@ sub dcreate {
 			
 			if ($options->{subType} eq 'remote') {
 				$localCterm->command("disconnect");
-				$localCterm->command('pdelpid', $remoteCterm);
-				my ($time, $timeout) = (time, 6);
+				my ($time, $timeout) = (time, 9);
+				kill 'SIGKILL', $remoteCterm;
 				my $status = kill 0, $remoteCterm;
 				while ($status) {
 					if ((time-$time) > $timeout) {
 						die "remoteCterm still exists";
-					}   
-				$status = kill 0, $remoteCterm;
+					}
+					$status = kill 0, $remoteCterm;
 				}
 			}
 			$localCterm->DESTROY();	
@@ -442,17 +502,17 @@ sub dcreate {
 			
 			if ($options->{subType} eq 'remote') {
 				$localCterm->command("disconnect");
-				$localCterm->command('pdelpid', $remoteCterm);
-				my ($time, $timeout) = (time, 6);
+				my ($time, $timeout) = (time, 9);
+				kill 'SIGKILL', $remoteCterm;
 				my $status = kill 0, $remoteCterm;
 				while ($status) {
 					if ((time-$time) > $timeout) {
 						die "remoteCterm still exists";
-					}   
-				$status = kill 0, $remoteCterm;
+					}
+					$status = kill 0, $remoteCterm;
 				}
 			}
-			$localCterm->DESTROY();
+			$localCterm->DESTROY();	
 			
 			if (!-e $parameter) {  ##comment##
 				die "cterm did not throw an error" if ($errorNotOccured);
@@ -502,14 +562,14 @@ sub ddelete {
 			
 			if ($options->{subType} eq 'remote') {
 				$localCterm->command("disconnect");
-				$localCterm->command('pdelpid', $remoteCterm);
-				my ($time, $timeout) = (time, 6);
+				my ($time, $timeout) = (time, 9);
+				kill 'SIGKILL', $remoteCterm;
 				my $status = kill 0, $remoteCterm;
 				while ($status) {
 					if ((time-$time) > $timeout) {
 						die "remoteCterm still exists";
-					}   
-				$status = kill 0, $remoteCterm;
+					}
+					$status = kill 0, $remoteCterm;
 				}
 			}
 			$localCterm->DESTROY();	
@@ -554,14 +614,14 @@ sub ddelete {
 			
 			if ($options->{subType} eq 'remote') {
 				$localCterm->command("disconnect");
-				$localCterm->command('pdelpid', $remoteCterm);
-				my ($time, $timeout) = (time, 6);
+				my ($time, $timeout) = (time, 9);
+				kill 'SIGKILL', $remoteCterm;
 				my $status = kill 0, $remoteCterm;
 				while ($status) {
 					if ((time-$time) > $timeout) {
 						die "remoteCterm still exists";
-					}   
-				$status = kill 0, $remoteCterm;
+					}
+					$status = kill 0, $remoteCterm;
 				}
 			}
 			$localCterm->DESTROY();	
@@ -611,17 +671,17 @@ sub ddelete {
 			
 			if ($options->{subType} eq 'remote') {
 				$localCterm->command("disconnect");
-				$localCterm->command('pdelpid', $remoteCterm);
-				my ($time, $timeout) = (time, 6);
+				my ($time, $timeout) = (time, 9);
+				kill 'SIGKILL', $remoteCterm;
 				my $status = kill 0, $remoteCterm;
 				while ($status) {
 					if ((time-$time) > $timeout) {
 						die "remoteCterm still exists";
-					}   
-				$status = kill 0, $remoteCterm;
+					}
+					$status = kill 0, $remoteCterm;
 				}
 			}
-			$localCterm->DESTROY();
+			$localCterm->DESTROY();	
 			
 			close $file;
 			if (-e $parameter) {  ##comment##
@@ -669,14 +729,14 @@ sub ddelete {
 			
 			if ($options->{subType} eq 'remote') {
 				$localCterm->command("disconnect");
-				$localCterm->command('pdelpid', $remoteCterm);
-				my ($time, $timeout) = (time, 6);
+				my ($time, $timeout) = (time, 9);
+				kill 'SIGKILL', $remoteCterm;
 				my $status = kill 0, $remoteCterm;
 				while ($status) {
 					if ((time-$time) > $timeout) {
 						die "remoteCterm still exists";
-					}   
-				$status = kill 0, $remoteCterm;
+					}
+					$status = kill 0, $remoteCterm;
 				}
 			}
 			$localCterm->DESTROY();	
@@ -730,14 +790,14 @@ sub dmove {
 			
 			if ($options->{subType} eq 'remote') {
 				$localCterm->command("disconnect");
-				$localCterm->command('pdelpid', $remoteCterm);
-				my ($time, $timeout) = (time, 6);
+				my ($time, $timeout) = (time, 9);
+				kill 'SIGKILL', $remoteCterm;
 				my $status = kill 0, $remoteCterm;
 				while ($status) {
 					if ((time-$time) > $timeout) {
 						die "remoteCterm still exists";
-					}   
-				$status = kill 0, $remoteCterm;
+					}
+					$status = kill 0, $remoteCterm;
 				}
 			}
 			$localCterm->DESTROY();	
@@ -786,14 +846,14 @@ sub dmove {
 			
 			if ($options->{subType} eq 'remote') {
 				$localCterm->command("disconnect");
-				$localCterm->command('pdelpid', $remoteCterm);
-				my ($time, $timeout) = (time, 6);
+				my ($time, $timeout) = (time, 9);
+				kill 'SIGKILL', $remoteCterm;
 				my $status = kill 0, $remoteCterm;
 				while ($status) {
 					if ((time-$time) > $timeout) {
 						die "remoteCterm still exists";
-					}   
-				$status = kill 0, $remoteCterm;
+					}
+					$status = kill 0, $remoteCterm;
 				}
 			}
 			$localCterm->DESTROY();	
@@ -846,17 +906,17 @@ sub dmove {
 			
 			if ($options->{subType} eq 'remote') {
 				$localCterm->command("disconnect");
-				$localCterm->command('pdelpid', $remoteCterm);
-				my ($time, $timeout) = (time, 6);
+				my ($time, $timeout) = (time, 9);
+				kill 'SIGKILL', $remoteCterm;
 				my $status = kill 0, $remoteCterm;
 				while ($status) {
 					if ((time-$time) > $timeout) {
 						die "remoteCterm still exists";
-					}   
-				$status = kill 0, $remoteCterm;
+					}
+					$status = kill 0, $remoteCterm;
 				}
 			}
-			$localCterm->DESTROY();
+			$localCterm->DESTROY();	
 			
 			close $file;		
 			if (!-e $parameter2 || -e $parameter1) {  ##comment##
@@ -907,17 +967,17 @@ sub dmove {
 			
 			if ($options->{subType} eq 'remote') {
 				$localCterm->command("disconnect");
-				$localCterm->command('pdelpid', $remoteCterm);
-				my ($time, $timeout) = (time, 6);
+				my ($time, $timeout) = (time, 9);
+				kill 'SIGKILL', $remoteCterm;
 				my $status = kill 0, $remoteCterm;
 				while ($status) {
 					if ((time-$time) > $timeout) {
 						die "remoteCterm still exists";
-					}   
-				$status = kill 0, $remoteCterm;
+					}
+					$status = kill 0, $remoteCterm;
 				}
 			}
-			$localCterm->DESTROY();
+			$localCterm->DESTROY();	
 			
 			die "cterm did not throw an error" if ($errorNotOccured); 
 			
@@ -960,14 +1020,14 @@ sub echo {
 			
 			if ($options->{subType} eq 'remote') {
 				$localCterm->command("disconnect");
-				$localCterm->command('pdelpid', $remoteCterm);
-				my ($time, $timeout) = (time, 6);
+				my ($time, $timeout) = (time, 9);
+				kill 'SIGKILL', $remoteCterm;
 				my $status = kill 0, $remoteCterm;
 				while ($status) {
 					if ((time-$time) > $timeout) {
 						die "remoteCterm still exists";
-					}   
-				$status = kill 0, $remoteCterm;
+					}
+					$status = kill 0, $remoteCterm;
 				}
 			}
 			$localCterm->DESTROY();	
@@ -1023,17 +1083,17 @@ sub fcopy {
 			
 			if ($options->{subType} eq 'remote') {
 				$localCterm->command("disconnect");
-				$localCterm->command('pdelpid', $remoteCterm);
-				my ($time, $timeout) = (time, 6);
+				my ($time, $timeout) = (time, 9);
+				kill 'SIGKILL', $remoteCterm;
 				my $status = kill 0, $remoteCterm;
 				while ($status) {
 					if ((time-$time) > $timeout) {
 						die "remoteCterm still exists";
-					}   
-				$status = kill 0, $remoteCterm;
+					}
+					$status = kill 0, $remoteCterm;
 				}
 			}
-			$localCterm->DESTROY();
+			$localCterm->DESTROY();	
 			
 			die "file was not copied" if (!-e $parameter2 || !-e $parameter1);
 			
@@ -1082,17 +1142,17 @@ sub fcopy {
 			
 			if ($options->{subType} eq 'remote') {
 				$localCterm->command("disconnect");
-				$localCterm->command('pdelpid', $remoteCterm);
-				my ($time, $timeout) = (time, 6);
+				my ($time, $timeout) = (time, 9);
+				kill 'SIGKILL', $remoteCterm;
 				my $status = kill 0, $remoteCterm;
 				while ($status) {
 					if ((time-$time) > $timeout) {
 						die "remoteCterm still exists";
-					}   
-				$status = kill 0, $remoteCterm;
+					}
+					$status = kill 0, $remoteCterm;
 				}
 			}
-			$localCterm->DESTROY();
+			$localCterm->DESTROY();	
 			
 			close $file;		
 			if (!-e $parameter2 || !-e $parameter1) {  ##comment##
@@ -1143,17 +1203,17 @@ sub fcopy {
 			
 			if ($options->{subType} eq 'remote') {
 				$localCterm->command("disconnect");
-				$localCterm->command('pdelpid', $remoteCterm);
-				my ($time, $timeout) = (time, 6);
+				my ($time, $timeout) = (time, 9);
+				kill 'SIGKILL', $remoteCterm;
 				my $status = kill 0, $remoteCterm;
 				while ($status) {
 					if ((time-$time) > $timeout) {
 						die "remoteCterm still exists";
-					}   
-				$status = kill 0, $remoteCterm;
+					}
+					$status = kill 0, $remoteCterm;
 				}
 			}
-			$localCterm->DESTROY();
+			$localCterm->DESTROY();	
 			
 			die "cterm did not throw an error" if ($errorNotOccured); 
 			
@@ -1198,14 +1258,14 @@ sub fcreate {
 			
 			if ($options->{subType} eq 'remote') {
 				$localCterm->command("disconnect");
-				$localCterm->command('pdelpid', $remoteCterm);
-				my ($time, $timeout) = (time, 6);
+				my ($time, $timeout) = (time, 9);
+				kill 'SIGKILL', $remoteCterm;
 				my $status = kill 0, $remoteCterm;
 				while ($status) {
 					if ((time-$time) > $timeout) {
 						die "remoteCterm still exists";
-					}   
-				$status = kill 0, $remoteCterm;
+					}
+					$status = kill 0, $remoteCterm;
 				}
 			}
 			$localCterm->DESTROY();	
@@ -1255,17 +1315,17 @@ sub fcreate {
 			
 			if ($options->{subType} eq 'remote') {
 				$localCterm->command("disconnect");
-				$localCterm->command('pdelpid', $remoteCterm);
-				my ($time, $timeout) = (time, 6);
+				my ($time, $timeout) = (time, 9);
+				kill 'SIGKILL', $remoteCterm;
 				my $status = kill 0, $remoteCterm;
 				while ($status) {
 					if ((time-$time) > $timeout) {
 						die "remoteCterm still exists";
-					}   
-				$status = kill 0, $remoteCterm;
+					}
+					$status = kill 0, $remoteCterm;
 				}
 			}
-			$localCterm->DESTROY();
+			$localCterm->DESTROY();	
 			
 			if (-s $parameter != 0) {
 				die "cterm did not throw an error" if ($errorNotOccured);
@@ -1286,7 +1346,7 @@ sub fcreate {
 	}
 	
 	$subFunction = 'invalidParameter';
-	$parameter = "$scriptDir/$sub/>.txt";
+	$parameter = "$scriptDir/$sub/tes:t.txt";
 	if ($options->{subFunction} eq $subFunction) {
 		eval {
 			(rmtree("$scriptDir/$sub") or die "can not delete: $scriptDir/$sub") if(-e "$scriptDir/$sub");
@@ -1312,17 +1372,17 @@ sub fcreate {
 			
 			if ($options->{subType} eq 'remote') {
 				$localCterm->command("disconnect");
-				$localCterm->command('pdelpid', $remoteCterm);
-				my ($time, $timeout) = (time, 6);
+				my ($time, $timeout) = (time, 9);
+				kill 'SIGKILL', $remoteCterm;
 				my $status = kill 0, $remoteCterm;
 				while ($status) {
 					if ((time-$time) > $timeout) {
 						die "remoteCterm still exists";
-					}   
-				$status = kill 0, $remoteCterm;
+					}
+					$status = kill 0, $remoteCterm;
 				}
 			}
-			$localCterm->DESTROY();
+			$localCterm->DESTROY();	
 			
 			if (!-e $parameter) {  ##comment##
 				die "cterm did not throw an error" if ($errorNotOccured);
@@ -1375,14 +1435,14 @@ sub fdelete {
 			
 			if ($options->{subType} eq 'remote') {
 				$localCterm->command("disconnect");
-				$localCterm->command('pdelpid', $remoteCterm);
-				my ($time, $timeout) = (time, 6);
+				my ($time, $timeout) = (time, 9);
+				kill 'SIGKILL', $remoteCterm;
 				my $status = kill 0, $remoteCterm;
 				while ($status) {
 					if ((time-$time) > $timeout) {
 						die "remoteCterm still exists";
-					}   
-				$status = kill 0, $remoteCterm;
+					}
+					$status = kill 0, $remoteCterm;
 				}
 			}
 			$localCterm->DESTROY();	
@@ -1430,14 +1490,14 @@ sub fdelete {
 			
 			if ($options->{subType} eq 'remote') {
 				$localCterm->command("disconnect");
-				$localCterm->command('pdelpid', $remoteCterm);
-				my ($time, $timeout) = (time, 6);
+				my ($time, $timeout) = (time, 9);
+				kill 'SIGKILL', $remoteCterm;
 				my $status = kill 0, $remoteCterm;
 				while ($status) {
 					if ((time-$time) > $timeout) {
 						die "remoteCterm still exists";
-					}   
-				$status = kill 0, $remoteCterm;
+					}
+					$status = kill 0, $remoteCterm;
 				}
 			}
 			$localCterm->DESTROY();	
@@ -1488,14 +1548,14 @@ sub fdelete {
 			
 			if ($options->{subType} eq 'remote') {
 				$localCterm->command("disconnect");
-				$localCterm->command('pdelpid', $remoteCterm);
-				my ($time, $timeout) = (time, 6);
+				my ($time, $timeout) = (time, 9);
+				kill 'SIGKILL', $remoteCterm;
 				my $status = kill 0, $remoteCterm;
 				while ($status) {
 					if ((time-$time) > $timeout) {
 						die "remoteCterm still exists";
-					}   
-				$status = kill 0, $remoteCterm;
+					}
+					$status = kill 0, $remoteCterm;
 				}
 			}
 			$localCterm->DESTROY();	
@@ -1551,17 +1611,17 @@ sub fget {
 			
 			if ($options->{subType} eq 'remote') {
 				$localCterm->command("disconnect");
-				$localCterm->command('pdelpid', $remoteCterm);
-				my ($time, $timeout) = (time, 6);
+				my ($time, $timeout) = (time, 9);
+				kill 'SIGKILL', $remoteCterm;
 				my $status = kill 0, $remoteCterm;
 				while ($status) {
 					if ((time-$time) > $timeout) {
 						die "remoteCterm still exists";
-					}   
+					}
 					$status = kill 0, $remoteCterm;
 				}
 			}
-			$localCterm->DESTROY();
+			$localCterm->DESTROY();	
 			
 			die "file was not copied" if (!-e $parameter2 || !-e $parameter1);
 			
@@ -1611,17 +1671,17 @@ sub fget {
 			
 			if ($options->{subType} eq 'remote') {
 				$localCterm->command("disconnect");
-				$localCterm->command('pdelpid', $remoteCterm);
-				my ($time, $timeout) = (time, 6);
+				my ($time, $timeout) = (time, 9);
+				kill 'SIGKILL', $remoteCterm;
 				my $status = kill 0, $remoteCterm;
 				while ($status) {
 					if ((time-$time) > $timeout) {
 						die "remoteCterm still exists";
-					}   
-				$status = kill 0, $remoteCterm;
+					}
+					$status = kill 0, $remoteCterm;
 				}
 			}
-			$localCterm->DESTROY();
+			$localCterm->DESTROY();	
 			
 			close $file;		
 			if (!-e $parameter2 || !-e $parameter1) {  ##comment##
@@ -1672,17 +1732,17 @@ sub fget {
 			
 			if ($options->{subType} eq 'remote') {
 				$localCterm->command("disconnect");
-				$localCterm->command('pdelpid', $remoteCterm);
-				my ($time, $timeout) = (time, 6);
+				my ($time, $timeout) = (time, 9);
+				kill 'SIGKILL', $remoteCterm;
 				my $status = kill 0, $remoteCterm;
 				while ($status) {
 					if ((time-$time) > $timeout) {
 						die "remoteCterm still exists";
-					}   
-				$status = kill 0, $remoteCterm;
+					}
+					$status = kill 0, $remoteCterm;
 				}
 			}
-			$localCterm->DESTROY();
+			$localCterm->DESTROY();	
 			
 			die "cterm did not throw an error" if ($errorNotOccured); 
 			
@@ -1758,14 +1818,14 @@ sub fhash {
 			
 			if ($options->{subType} eq 'remote') {
 				$localCterm->command("disconnect");
-				$localCterm->command('pdelpid', $remoteCterm);
-				my ($time, $timeout) = (time, 6);
+				my ($time, $timeout) = (time, 9);
+				kill 'SIGKILL', $remoteCterm;
 				my $status = kill 0, $remoteCterm;
 				while ($status) {
 					if ((time-$time) > $timeout) {
 						die "remoteCterm still exists";
-					}   
-				$status = kill 0, $remoteCterm;
+					}
+					$status = kill 0, $remoteCterm;
 				}
 			}
 			$localCterm->DESTROY();	
@@ -1821,17 +1881,17 @@ sub fmove {
 			
 			if ($options->{subType} eq 'remote') {
 				$localCterm->command("disconnect");
-				$localCterm->command('pdelpid', $remoteCterm);
-				my ($time, $timeout) = (time, 6);
+				my ($time, $timeout) = (time, 9);
+				kill 'SIGKILL', $remoteCterm;
 				my $status = kill 0, $remoteCterm;
 				while ($status) {
 					if ((time-$time) > $timeout) {
 						die "remoteCterm still exists";
-					}   
-				$status = kill 0, $remoteCterm;
+					}
+					$status = kill 0, $remoteCterm;
 				}
 			}
-			$localCterm->DESTROY();
+			$localCterm->DESTROY();	
 			
 			die "file was not moved" if (!-e $parameter2 || -e $parameter1);
 			
@@ -1880,14 +1940,14 @@ sub fmove {
 			
 			if ($options->{subType} eq 'remote') {
 				$localCterm->command("disconnect");
-				$localCterm->command('pdelpid', $remoteCterm);
-				my ($time, $timeout) = (time, 6);
+				my ($time, $timeout) = (time, 9);
+				kill 'SIGKILL', $remoteCterm;
 				my $status = kill 0, $remoteCterm;
 				while ($status) {
 					if ((time-$time) > $timeout) {
 						die "remoteCterm still exists";
-					}   
-				$status = kill 0, $remoteCterm;
+					}
+					$status = kill 0, $remoteCterm;
 				}
 			}
 			$localCterm->DESTROY();	
@@ -1941,14 +2001,14 @@ sub fmove {
 			
 			if ($options->{subType} eq 'remote') {
 				$localCterm->command("disconnect");
-				$localCterm->command('pdelpid', $remoteCterm);
-				my ($time, $timeout) = (time, 6);
+				my ($time, $timeout) = (time, 9);
+				kill 'SIGKILL', $remoteCterm;
 				my $status = kill 0, $remoteCterm;
 				while ($status) {
 					if ((time-$time) > $timeout) {
 						die "remoteCterm still exists";
-					}   
-				$status = kill 0, $remoteCterm;
+					}
+					$status = kill 0, $remoteCterm;
 				}
 			}
 			$localCterm->DESTROY();	
@@ -2004,17 +2064,17 @@ sub fput {
 			
 			if ($options->{subType} eq 'remote') {
 				$localCterm->command("disconnect");
-				$localCterm->command('pdelpid', $remoteCterm);
-				my ($time, $timeout) = (time, 6);
+				my ($time, $timeout) = (time, 9);
+				kill 'SIGKILL', $remoteCterm;
 				my $status = kill 0, $remoteCterm;
 				while ($status) {
 					if ((time-$time) > $timeout) {
 						die "remoteCterm still exists";
-					}   
-				$status = kill 0, $remoteCterm;
+					}
+					$status = kill 0, $remoteCterm;
 				}
 			}
-			$localCterm->DESTROY();
+			$localCterm->DESTROY();	
 			
 			die "file was not copied" if (!-e $parameter2 || !-e $parameter1);
 			
@@ -2063,17 +2123,17 @@ sub fput {
 			
 			if ($options->{subType} eq 'remote') {
 				$localCterm->command("disconnect");
-				$localCterm->command('pdelpid', $remoteCterm);
-				my ($time, $timeout) = (time, 6);
+				my ($time, $timeout) = (time, 9);
+				kill 'SIGKILL', $remoteCterm;
 				my $status = kill 0, $remoteCterm;
 				while ($status) {
 					if ((time-$time) > $timeout) {
 						die "remoteCterm still exists";
-					}   
-				$status = kill 0, $remoteCterm;
+					}
+					$status = kill 0, $remoteCterm;
 				}
 			}
-			$localCterm->DESTROY();
+			$localCterm->DESTROY();	
 			
 			close $file;		
 			if (!-e $parameter2 || !-e $parameter1) {  ##comment##
@@ -2124,17 +2184,17 @@ sub fput {
 			
 			if ($options->{subType} eq 'remote') {
 				$localCterm->command("disconnect");
-				$localCterm->command('pdelpid', $remoteCterm);
-				my ($time, $timeout) = (time, 6);
+				my ($time, $timeout) = (time, 9);
+				kill 'SIGKILL', $remoteCterm;
 				my $status = kill 0, $remoteCterm;
 				while ($status) {
 					if ((time-$time) > $timeout) {
 						die "remoteCterm still exists";
-					}   
-				$status = kill 0, $remoteCterm;
+					}
+					$status = kill 0, $remoteCterm;
 				}
 			}
-			$localCterm->DESTROY();
+			$localCterm->DESTROY();	
 			
 			die "cterm did not throw an error" if ($errorNotOccured); 
 			
@@ -2185,14 +2245,14 @@ sub fsize {
 			
 			if ($options->{subType} eq 'remote') {
 				$localCterm->command("disconnect");
-				$localCterm->command('pdelpid', $remoteCterm);
-				my ($time, $timeout) = (time, 6);
+				my ($time, $timeout) = (time, 9);
+				kill 'SIGKILL', $remoteCterm;
 				my $status = kill 0, $remoteCterm;
 				while ($status) {
 					if ((time-$time) > $timeout) {
 						die "remoteCterm still exists";
-					}   
-				$status = kill 0, $remoteCterm;
+					}
+					$status = kill 0, $remoteCterm;
 				}
 			}
 			$localCterm->DESTROY();	
@@ -2235,14 +2295,14 @@ sub list {
 			
 			if ($options->{subType} eq 'remote') {
 				$localCterm->command("disconnect");
-				$localCterm->command('pdelpid', $remoteCterm);
-				my ($time, $timeout) = (time, 6);
+				my ($time, $timeout) = (time, 9);
+				kill 'SIGKILL', $remoteCterm;
 				my $status = kill 0, $remoteCterm;
 				while ($status) {
 					if ((time-$time) > $timeout) {
 						die "remoteCterm still exists";
-					}   
-				$status = kill 0, $remoteCterm;
+					}
+					$status = kill 0, $remoteCterm;
 				}
 			}
 			$localCterm->DESTROY();	
@@ -2295,14 +2355,14 @@ sub load {
 			
 			if ($options->{subType} eq 'remote') {
 				$localCterm->command("disconnect");
-				$localCterm->command('pdelpid', $remoteCterm);
-				my ($time, $timeout) = (time, 6);
+				my ($time, $timeout) = (time, 9);
+				kill 'SIGKILL', $remoteCterm;
 				my $status = kill 0, $remoteCterm;
 				while ($status) {
 					if ((time-$time) > $timeout) {
 						die "remoteCterm still exists";
-					}   
-				$status = kill 0, $remoteCterm;
+					}
+					$status = kill 0, $remoteCterm;
 				}
 			}
 			$localCterm->DESTROY();	
@@ -2346,17 +2406,17 @@ sub version {
 			
 			if ($options->{subType} eq 'remote') {
 				$localCterm->command("disconnect");
-				$localCterm->command('pdelpid', $remoteCterm);
-				my ($time, $timeout) = (time, 6);
+				my ($time, $timeout) = (time, 9);
+				kill 'SIGKILL', $remoteCterm;
 				my $status = kill 0, $remoteCterm;
 				while ($status) {
 					if ((time-$time) > $timeout) {
 						die "remoteCterm still exists";
-					}   
-				$status = kill 0, $remoteCterm;
+					}
+					$status = kill 0, $remoteCterm;
 				}
 			}
-			$localCterm->DESTROY();	
+			$localCterm->DESTROY();		
 			
 			die "answer is incorrect" unless ($answer =~ /^(\d+\.)?(\d+\.)?(\d+)$/);
 			
