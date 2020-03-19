@@ -99,6 +99,8 @@ my $dispatchTable = {
 	
 	'fhash.base.local'  => sub { return fhash({subFunction => 'base', subType => 'local'}) }, #ok
 	'fhash.base.remote'  => sub { return fhash({subFunction => 'base', subType => 'remote'}) }, #ok
+	'fhash.notExistingFile.local'  => sub { return fhash({subFunction => 'notExistingFile', subType => 'local'}) },
+	'fhash.notExistingFile.remote'  => sub { return fhash({subFunction => 'notExistingFile', subType => 'remote'}) },
 	
 	'fmove.base.local'  => sub { return fmove({subFunction => 'base', subType => 'local'}) }, #ok
 	'fmove.base.remote'  => sub { return fmove({subFunction => 'base', subType => 'remote'}) }, #ok
@@ -1699,7 +1701,6 @@ sub fget {
 	}
 }
 
-
 sub fhash {
 	my ($options) = @_;
 	my $sub = substr((caller(0))[3], 6);
@@ -1758,19 +1759,72 @@ sub fhash {
 			
 			if ($options->{subType} eq 'remote') {
 				$localCterm->command("disconnect");
-				$localCterm->command('pdelpid', $remoteCterm);
-				my ($time, $timeout) = (time, 6);
+				my ($time, $timeout) = (time, 9);
+				kill 'SIGKILL', $remoteCterm;
 				my $status = kill 0, $remoteCterm;
 				while ($status) {
 					if ((time-$time) > $timeout) {
 						die "remoteCterm still exists";
-					}   
-				$status = kill 0, $remoteCterm;
+					}
+					$status = kill 0, $remoteCterm;
 				}
 			}
 			$localCterm->DESTROY();	
 			
 			die "hash values for matching files: $answer1 and $answer2, hash values for non-matching files: $answer1 and $answer3" if (($answer1 ne $answer2) || ($answer1 eq $answer3)); ##comment## a hash értékeket kell összehasonlítani
+			
+		}; if ($@) {
+			$loghandler->writeLog({ text => "$sub.$subFunction.$options->{subType}: error: $@", textColour => "white on_red"});
+			$loghandler->writeLog({ text => "$sub.$subFunction.$options->{subType}: FAILED", textColour => "white on_red"});
+			(rmtree("$scriptDir/$sub") or die "can not delete: $scriptDir/$sub") if(-e "$scriptDir/$sub");
+			return 1;
+		} else {
+			$loghandler->writeLog({ text => "$sub.$subFunction.$options->{subType}: PASSED", textColour => "white on_green"});
+			(rmtree("$scriptDir/$sub") or die "can not delete: $scriptDir/$sub") if(-e "$scriptDir/$sub");
+			return 0;
+		}
+	}
+	
+	$subFunction = 'notExistingFile';
+	$parameter1 = "$scriptDir/$sub/text.txt";
+	if ($options->{subFunction} eq $subFunction) {
+		eval {
+			(rmtree("$scriptDir/$sub") or die "can not delete: $scriptDir/$sub") if(-e "$scriptDir/$sub");
+			mkdir("$scriptDir/$sub") or die "can not create: $scriptDir/$sub";
+			
+			my $localCterm = new CTermInterface({cterm => $cterm});
+			$loghandler->writeLog({ text => "$sub.$subFunction.$options->{subType}: local cterm: $localCterm->{childpid}"});
+			my $remoteCterm;
+			if ($options->{subType} eq 'remote') {
+				$remoteCterm = open3(my $stdin, my $stdout, my $stderr, $cterm, "-s", "-a", $remoteIp, "-p", $remotePort);
+				$loghandler->writeLog({ text => "$sub.$subFunction.$options->{subType}: remote cterm: $remoteCterm"});
+				$localCterm->command("connect", $remoteIp, $remotePort);
+			}
+			
+			$loghandler->writeLog({ text => "$sub.$subFunction.$options->{subType}: command: $command $parameter1"});
+			my $errorNotOccured = 0;
+			eval {
+				$localCterm->command($command, $parameter1);
+			}; if ($@) {
+			} else {
+				$errorNotOccured = 1;
+			}
+			
+			if ($options->{subType} eq 'remote') {
+				$localCterm->command("disconnect");
+				my ($time, $timeout) = (time, 9);
+				kill 'SIGKILL', $remoteCterm;
+				my $status = kill 0, $remoteCterm;
+				while ($status) {
+					if ((time-$time) > $timeout) {
+						die "remoteCterm still exists";
+					}
+					$status = kill 0, $remoteCterm;
+				}
+			}
+			$localCterm->DESTROY();	
+			
+			die "cterm did not throw an error" if ($errorNotOccured);
 			
 		}; if ($@) {
 			$loghandler->writeLog({ text => "$sub.$subFunction.$options->{subType}: error: $@", textColour => "white on_red"});
